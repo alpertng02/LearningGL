@@ -1,178 +1,345 @@
-﻿#include <glad/glad.h>
+﻿
+
+#include <glad/glad.h>
 #include <GLFW/glfw3.h>
+   
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
+#include <Shader.h>
 #include <glm/glm.hpp>
-#include <glm/mat3x3.hpp>
-#include <glm/ext/matrix_transform.hpp>
 
 #include <iostream>
-#include <format>
-#include <algorithm>
-#include <memory>
-#include <string_view>
+#include <array>
+#include <vector>
 
-void frameBufferSizeCallback(GLFWwindow* window, int width, int height) {
-    glViewport(0, 0, width, height);
+extern "C" {
+    _declspec(dllexport) uint32_t NvOptimusEnablement = 1;
+    _declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 }
 
-void processInput(GLFWwindow* window) {
-    static size_t mouseCounter { 0 };
-    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-        glfwSetWindowShouldClose(window, true);
+void framebuffer_size_callback(GLFWwindow* window, int width, int height);
+void processInput(GLFWwindow* window);
+
+// settings
+constexpr unsigned int kScreenWidth = 800;
+constexpr unsigned int kScreenHeight = 600;
+
+struct Vertex {
+    glm::vec3 pos {};
+    glm::vec3 color {};
+    glm::vec2 tex {};
+};
+
+class Triangle {
+public:
+    Triangle(const Vertex& vertex1, const Vertex& vertex2, const Vertex& vertex3) : mVerticies { vertex1, vertex2, vertex3 } {
+        glGenVertexArrays(1, &mVAO);
+        glGenBuffers(1, &mVBO);
+
+        glBindVertexArray(mVAO);
+
+        glBindBuffer(GL_ARRAY_BUFFER, mVBO);
+        glBufferData(GL_ARRAY_BUFFER, mVerticies.size() * sizeof(Vertex), mVerticies.data(), GL_STATIC_DRAW);
+
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (const void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (const void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (const void*)(6 * sizeof(float)));
+        glEnableVertexAttribArray(2);
     }
-}
 
-GLuint makeShader(const char* const *shaderSource, size_t sourceSize, GLenum shaderType) {
-    auto shader { glCreateShader(shaderType) };
-    glShaderSource(shader, 1, shaderSource, nullptr);
+    void draw(const unsigned shaderProgram, const unsigned texture) {
 
-    int success {};
-    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
-    if (!success) {
-        char logBuffer[512];
-        glGetShaderInfoLog(shader, std::size(logBuffer), nullptr, logBuffer);
-        std::cerr << "Shader Failed: " << logBuffer << std::endl;
+        glUseProgram(shaderProgram);
+        glUniform1i(glGetUniformLocation(shaderProgram, "ourTexture"), 0);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glBindVertexArray(mVAO);
+
+        glDrawArrays(GL_TRIANGLES, 0, 3);
     }
-    return shader;
-}
+
+    void rotate(const float angleRad) {
+
+        float centerX {};
+        float centerY {};
+        for (auto& vertex : mVerticies) {
+            centerX += vertex.pos.x;
+            centerY += vertex.pos.y;
+        }
+        centerX /= 3;
+        centerY /= 3;
+
+        const glm::mat3x3 translationMatrix1 { {1,        0,        0},
+                                               {0,        1,        0},
+                                               {-centerX, -centerY, 1} };
+        const glm::mat3x3 translationMatrix2 { {1,        0,        0},
+                                               {0,        1,        0},
+                                               {centerX,  centerY,  1} };
+
+        const glm::mat3x3 rotationMatrix { {glm::cos(angleRad)     , glm::sin(angleRad), 0},
+                                           {-glm::sin(angleRad)    , glm::cos(angleRad), 0},
+                                           {0                      , 0                 , 1} };
+
+        const glm::mat3x3 matrixT { translationMatrix2 * rotationMatrix * translationMatrix1 };
+
+        for (auto& vertex : mVerticies) {
+            vertex.pos = matrixT * vertex.pos;
+        }
+    }
+
+    void translate(const float moveX, const float moveY) {
+        for (auto& vertex : mVerticies) {
+            vertex.pos.x += moveX;
+            vertex.pos.y += moveY;
+        }
+    }
+
+    ~Triangle() {
+        glDeleteVertexArrays(1, &mVAO);
+        glDeleteBuffers(1, &mVBO);
+    }
+
+private:
+    std::array<Vertex, 3> mVerticies {};
+    unsigned int mVAO {};
+    unsigned int mVBO {};
+};
+
+class Rectangle {
+public:
+    Rectangle(const Vertex& vertex1, const Vertex& vertex2, const Vertex& vertex3, const Vertex& vertex4) : mVerticies { vertex1, vertex2, vertex3, vertex4 } {
+        glGenVertexArrays(1, &mVAO);
+        glGenBuffers(1, &mVBO); 
+        glGenBuffers(1, &mEBO);
+
+        glBindVertexArray(mVAO);
+
+        glBindBuffer(GL_ARRAY_BUFFER, mVBO);
+        glBufferData(GL_ARRAY_BUFFER, mVerticies.size() * sizeof(Vertex), mVerticies.data(), GL_STATIC_DRAW);
+
+        constexpr unsigned int indices[] { 0, 1, 3,
+                                           1, 2, 3 };
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mEBO);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, std::size(indices) * sizeof(unsigned int), indices, GL_STATIC_DRAW);
+
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (const void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (const void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (const void*)(6 * sizeof(float)));
+        glEnableVertexAttribArray(2);
+    }
+
+    void draw(const unsigned shaderProgram, const std::vector<unsigned int>& textures) {
+
+        for (int i = 0; const auto & texture : textures) {
+            glActiveTexture(GL_TEXTURE0 + i);
+            glBindTexture(GL_TEXTURE_2D, texture);
+            i++;
+        }
+        glUseProgram(shaderProgram);
+
+        glBindVertexArray(mVAO);
+
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    }
+
+    void rotate(const float angleRad) {
+
+        float centerX {};
+        float centerY {};
+        for (auto& vertex : mVerticies) {
+            centerX += vertex.pos.x;
+            centerY += vertex.pos.y;
+        }
+        centerX /= 3;
+        centerY /= 3;
+
+        const glm::mat3x3 translationMatrix1 { {1,        0,        0},
+                                               {0,        1,        0},
+                                               {-centerX, -centerY, 1} };
+        const glm::mat3x3 translationMatrix2 { {1,        0,        0},
+                                               {0,        1,        0},
+                                               {centerX,  centerY,  1} };
+
+        const glm::mat3x3 rotationMatrix { {glm::cos(angleRad)     , glm::sin(angleRad), 0},
+                                           {-glm::sin(angleRad)    , glm::cos(angleRad), 0},
+                                           {0                      , 0                 , 1} };
+
+        const glm::mat3x3 matrixT { translationMatrix2 * rotationMatrix * translationMatrix1 };
+
+        for (auto& vertex : mVerticies) {
+            vertex.pos = matrixT * vertex.pos;
+        }
+    }
+
+    void translate(const float moveX, const float moveY) {
+        for (auto& vertex : mVerticies) {
+            vertex.pos.x += moveX;
+            vertex.pos.y += moveY;
+        }
+    }
+
+    ~Rectangle() {
+        glDeleteVertexArrays(1, &mVAO);
+        glDeleteBuffers(1, &mVBO);
+        glDeleteBuffers(1, &mEBO);
+    }
+
+private:
+    std::array<Vertex, 4> mVerticies {};
+    unsigned int mVAO {};
+    unsigned int mVBO {};
+    unsigned int mEBO {};
+};
 
 int main() {
-    // The constant values for window dimensions.
-    constexpr auto kWindowHeight { 800 };
-    constexpr auto kWindowWidth { 800 };
-    // The test shader.
-    const char* vertexShaderSource = "#version 330 core\n"
-        "layout (location = 0) in vec3 aPos;\n"
-        "void main()\n"
-        "{\n"
-        "   gl_Position = vec4(aPos.x, aPos.y, aPos.z, 1.0);\n"
-        "}\0";
-    const char * fragmentShaderSource = "#version 330 core\n"
-        "out vec4 FragColor;\n"
-        "void main() {\n"
-        "   FragColor = vec4(0.8f, 0.0f, 0.0f, 1.0f);\n"
-    "}\0";
-
-    // Initiliaze and create the GLFW window.
+    // glfw: initialize and configure
+    // ------------------------------
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    auto window { glfwCreateWindow(kWindowWidth, kWindowHeight, "My Test Window", nullptr, nullptr) };
 
-    if (window == nullptr) {
-        std::cerr << "Failed to create window\n";
+#ifdef __APPLE__
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+#endif
+
+    // glfw window creation
+    // --------------------
+    GLFWwindow* window = glfwCreateWindow(kScreenWidth, kScreenHeight, "LearnOpenGL", NULL, NULL);
+    if (window == NULL) {
+        std::cout << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
         return -1;
     }
     glfwMakeContextCurrent(window);
-
-    // Load the GLAD libarary (This needs to be called after glfwMakeContextCurrent()!!)
-    if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
-        std::cerr << "Failed to initiliaze GLAD\n";
-        return -1;
-    }
-    std::cout << "OpenGL Version: " << glGetString(GL_VERSION) << '\n';
-    // Set the OpenGL viewport size and assign the callback function so that the size is always the same as window size.
-    glViewport(0, 0, kWindowWidth, kWindowHeight);
-    glfwSetFramebufferSizeCallback(window, frameBufferSizeCallback);
-
-    auto vertexShader { glCreateShader(GL_VERTEX_SHADER) };
-    glShaderSource(vertexShader, 1, &vertexShaderSource, nullptr);
-    glCompileShader(vertexShader);
-    int success {};
-    glGetShaderiv(vertexShader, GL_COMPILE_STATUS, &success);
-    if (!success) {
-        char infoLog[512];
-        glGetShaderInfoLog(vertexShader, 512, nullptr, infoLog);
-        std::cerr << "ERROR::SHADER::VERTEX::COMPILATION_FAILED\n" << infoLog << '\n';
-        return -1;
-    }
-
-    auto fragmentShader { glCreateShader(GL_FRAGMENT_SHADER) };
-    glShaderSource(fragmentShader, 1, &fragmentShaderSource, nullptr);
-    glCompileShader(fragmentShader);
-    glGetShaderiv(fragmentShader, GL_COMPILE_STATUS, &success);
-    if (!success) {
-        char infolog[512];
-        glGetShaderInfoLog(fragmentShader, 512, nullptr, infolog);
-        std::cerr << "ERROR::SHADER::FRAGMENT::COMPILATION_FAILED\n" << infolog << '\n';
-    }
-
-    auto shaderProgram { glCreateProgram() };
-
-    glAttachShader(shaderProgram, vertexShader);
-    glAttachShader(shaderProgram, fragmentShader);
-    glLinkProgram(shaderProgram);
-    glUseProgram(shaderProgram);
+    glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     
+    GLFWimage images[1] {};
+    images[0].pixels = stbi_load("Misc/dogeIcon.jpg", &images[0].width, &images[0].height, 0, 4);
+    glfwSetWindowIcon(window, 1, images);
+    stbi_image_free(images[0].pixels);
 
-    glDeleteShader(vertexShader);
-    glDeleteShader(fragmentShader);
+    // glad: load all OpenGL function pointers
+    // ---------------------------------------
+    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
+        std::cout << "Failed to initialize GLAD" << std::endl;
+        return -1;
+    }
 
-    unsigned int VBO {}, VAO {};
-    // The main event loop.
-    float angle { 0.0f };
+    const char* vendor { reinterpret_cast<const char*>(glGetString(GL_VENDOR)) };
+    const char* renderer { reinterpret_cast<const char*>(glGetString(GL_RENDERER)) };
+
+    std::cout << "Current OpenGL Vendor: " << vendor << '\n';
+    std::cout << "Current OpenGL Renderer: " << renderer << '\n';
+
+    // build and compile our shader program
+    // ------------------------------------
+    Shader shader("Misc/Shaders/texture.vert", "Misc/Shaders/texture.frag"); // you can name your shader files however you like
+
+    // set up vertex data (and buffer(s)) and configure vertex attributes
+    // ------------------------------------------------------------------
+    constexpr Vertex vertex1 { glm::vec3(0.5f, 0.5f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec2(1.0f, 1.0f) };
+    constexpr Vertex vertex2 { glm::vec3(0.5f, -0.5f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(1.0f, 0.0f) };
+    constexpr Vertex vertex3 { glm::vec3(-0.5f, -0.5f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(0.0f, 0.0f) };
+    constexpr Vertex vertex4 { glm::vec3(-0.5f, 0.5f, 0.0f), glm::vec3(0.5f, 0.5f, 1.0f), glm::vec2(0.0f, 1.0f) };
+    //Triangle triangle(vertex1, vertex2, vertex3);
+    Rectangle rectangle(vertex1, vertex2, vertex3, vertex4);
+
+    // You can unbind the VAO afterwards so other VAO calls won't accidentally modify this VAO, but this rarely happens. Modifying other
+    // VAOs requires a call to glBindVertexArray anyways so we generally don't unbind VAOs (nor VBOs) when it's not directly necessary.
+    // glBindVertexArray(0);
+
+    stbi_set_flip_vertically_on_load(true);
+    unsigned int texture1 {};
+    glGenTextures(1, &texture1);
+    glBindTexture(GL_TEXTURE_2D, texture1);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    
+    int width {}, height {}, nrChannels {};
+    unsigned char * data { stbi_load("Misc/Textures/container.jpg", &width, &height, &nrChannels, 0) };
+    if (data == nullptr) {
+        std::cerr << "Failed to load texture\n";
+    }
+    //glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+    stbi_image_free(data);
+
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    unsigned int texture2 {};
+    glGenTextures(1, &texture2);
+    glBindTexture(GL_TEXTURE_2D, texture2);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    data = stbi_load("Misc/Textures/awesomeface.png", &width, &height, &nrChannels, 0);
+    if (data == nullptr) {
+        std::cerr << "Failed to load texture\n";
+    }
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    stbi_image_free(data);
+
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    shader.use();
+    glUniform1i(glGetUniformLocation(shader.ID, "texture1"), 0);
+    glUniform1i(glGetUniformLocation(shader.ID, "texture2"), 1);
+
+    // render loop
+    // -----------
     while (!glfwWindowShouldClose(window)) {
+        // input
+        // -----
+        processInput(window);
 
+        // render
+        // ------
+        glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        double mouseX {}, mouseY {};
-        glfwGetCursorPos(window, &mouseX, &mouseY);
-        auto posX { std::clamp(static_cast<int>(mouseX), 0, kWindowWidth) };
-        auto posY { std::clamp(static_cast<int>(mouseY), 0, kWindowHeight) };
-        
-        float scaleFactorX { static_cast<float>(posX) / kWindowWidth};
-        float scaleFactorY { static_cast<float>(posY) / kWindowHeight};
-                                                                                         
-        angle = glm::atan((kWindowHeight / 2.0f - posY ) / (posX - kWindowWidth / 2.0f)) + glm::pi<float>() / 6.0f;
-        if (posX < kWindowWidth / 2) {
-            angle += glm::pi<float>();
-        }
+        // render the triangle
+    
+        rectangle.draw(shader.ID, {texture1, texture2});
 
-        std::cout << std::format("Angle: {:.2f}\n", angle);
-        //std::cout << std::format("ScaleFactorX: {:.2f},\tScaleFactorY{:.2f}\n", scaleFactorX, scaleFactorY);
-
-        const glm::mat3x3 rotationMatrix { {glm::cos(angle), glm::sin(angle), 0},
-                                     {-1*glm::sin(angle), glm::cos(angle)   , 0},
-                                     {0              , 0                 , 1} };
-
-        glm::vec3 verticies[3] { glm::vec3(0.0f, 0.6f, 0.0f),
-                                 glm::vec3(-1.0f * 0.5f, -0.3f, 0.0f),
-                                 glm::vec3(0.5f, -0.3f, 0.0f) };
-
-        for (int i = 0; i < 3; i++) {
-            verticies[i] = rotationMatrix * verticies[i];
-        }
-
-        glGenVertexArrays(1, &VAO);
-        glGenBuffers(1, &VBO);             
-
-        glBindVertexArray(VAO);
-        glBindBuffer(GL_ARRAY_BUFFER, VBO);
-
-        glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec3) * 3, verticies, GL_DYNAMIC_DRAW);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
-        glEnableVertexAttribArray(0);
-
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-
-        glBindVertexArray(0);
-
-
-        glUseProgram(shaderProgram);
-        glBindVertexArray(VAO);
-        glDrawArrays(GL_TRIANGLES, 0, 3);
-
-        
+        // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
+        // -------------------------------------------------------------------------------
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
 
-    glDeleteVertexArrays(1, &VAO);
-    glDeleteBuffers(1, &VBO);
-    glDeleteProgram(shaderProgram);
-
-    // Clean up for resources.
+    // optional: de-allocate all resources once they've outlived their purpose:
+    // ------------------------------------------------------------------------
+    // glfw: terminate, clearing all previously allocated GLFW resources.
+    // ------------------------------------------------------------------
     glfwTerminate();
     return 0;
 }
+
+// process all input: query GLFW whether relevant keys are pressed/released this frame and react accordingly
+// ---------------------------------------------------------------------------------------------------------
+void processInput(GLFWwindow* window) {
+    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+        glfwSetWindowShouldClose(window, true);
+}
+
+// glfw: whenever the window size changed (by OS or user resize) this callback function executes
+// ---------------------------------------------------------------------------------------------
+void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
+    // make sure the viewport matches the new window dimensions; note that width and 
+    // height will be significantly larger than specified on retina displays.
+    glViewport(0, 0, width, height);
+}
+

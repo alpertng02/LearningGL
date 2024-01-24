@@ -15,3 +15,5 @@ set(CMAKE_CXX_STANDARD 20)
 
 # Include sub-projects.
 add_subdirectory ("LearningGL")
+add_subdirectory("MovingTriangle")
+add_subdirectory("Libraries")
